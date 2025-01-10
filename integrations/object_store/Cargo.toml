@@ -36,7 +36,8 @@ bytes = "1"
 flagset = "0.4"
 futures = "0.3"
 futures-util = "0.3"
-object_store = "0.11"
+# object_store = "0.11"
+object_store = { git = "https://github.com/XiangpengHao/arrow-rs.git", branch = "u64_range" }
 opendal = { version = "0.51.0", path = "../../core", default-features = false }
 pin-project = "1.1"
 send_wrapper = { version = "0.6", features = ["futures"], optional = true }

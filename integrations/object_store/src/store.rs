@@ -203,7 +203,7 @@ impl ObjectStore for OpendalStore {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: meta.last_modified().unwrap_or_default(),
-            size: meta.content_length() as usize,
+            size: meta.content_length(),
             e_tag: meta.etag().map(|x| x.to_string()),
             version: meta.version().map(|x| x.to_string()),
         };
@@ -250,11 +250,11 @@ impl ObjectStore for OpendalStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> object_store::Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> object_store::Result<Bytes> {
         let bs = self
             .inner
             .read_with(location.as_ref())
-            .range(range.start as u64..range.end as u64)
+            .range(range.start..range.end)
             .into_future()
             .into_send()
             .await
@@ -274,7 +274,7 @@ impl ObjectStore for OpendalStore {
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: meta.last_modified().unwrap_or_default(),
-            size: meta.content_length() as usize,
+            size: meta.content_length(),
             e_tag: meta.etag().map(|x| x.to_string()),
             version: meta.version().map(|x| x.to_string()),
         })
@@ -290,16 +290,14 @@ impl ObjectStore for OpendalStore {
         Ok(())
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         // object_store `Path` always removes trailing slash
         // need to add it back
         let path = prefix.map_or("".into(), |x| format!("{}/", x));
 
+        let f = self.inner.lister_with(&path).recursive(true);
         let fut = async move {
-            let stream = self
-                .inner
-                .lister_with(&path)
-                .recursive(true)
+            let stream = f
                 .await
                 .map_err(|err| format_object_store_error(err, &path))?;
 
@@ -319,13 +317,14 @@ impl ObjectStore for OpendalStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let path = prefix.map_or("".into(), |x| format!("{}/", x));
         let offset = offset.clone();
 
+        let operator = self.inner.clone();
         let fut = async move {
-            let list_with_start_after = self.inner.info().full_capability().list_with_start_after;
-            let mut fut = self.inner.lister_with(&path).recursive(true);
+            let list_with_start_after = operator.info().full_capability().list_with_start_after;
+            let mut fut = operator.lister_with(&path).recursive(true);
 
             // Use native start_after support if possible.
             if list_with_start_after {
@@ -337,6 +336,7 @@ impl ObjectStore for OpendalStore {
                 .map_err(|err| format_object_store_error(err, &path))?
                 .then(move |entry| {
                     let path = path.clone();
+                    let op_inner = operator.clone();
 
                     async move {
                         let entry = entry.map_err(|err| format_object_store_error(err, &path))?;
@@ -348,8 +348,7 @@ impl ObjectStore for OpendalStore {
                             return Ok(object_meta);
                         }
 
-                        let metadata = self
-                            .inner
+                        let metadata = op_inner
                             .stat(&path)
                             .await
                             .map_err(|err| format_object_store_error(err, &path))?;
@@ -612,7 +611,7 @@ mod tests {
 
         let meta = object_store.head(&path).await.unwrap();
 
-        assert_eq!(meta.size, all_bytes.len());
+        assert_eq!(meta.size, all_bytes.len() as u64);
 
         assert_eq!(
             object_store
